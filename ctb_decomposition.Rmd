@@ -56,30 +56,6 @@ plot_mctb_responses <- function(slice_of_data, adj.pratio = TRUE){
     NULL
   return(aplot)
 }
-
-CachedFit <- function(expr, rds_filename, save_only = F){
-  if(file.exists(rds_filename) && !save_only){
-    message('Loading...')
-    theFit <- readRDS(rds_filename)
-  } else if(file.exists(rds_filename) && save_only){
-      message('save_only is TRUE but file already exists (returning NULL)')
-      return(NULL)
-  } else {
-    message('Evaluating... (save_only = ', save_only, ')')
-    theFit <- try(eval(expr))
-    message('Writing result to ', rds_filename)
-    saveRDS(theFit, rds_filename)
-  }
-  if(save_only){
-      if(any('try-error' %in% class(theFit))){
-          return(theFit)
-      } else {
-          return(TRUE)
-      }
-  } else {
-      return(theFit)
-  }
-}
 ```
 
 We will fit a multi-level non-linear (on the parameters) regression model to the data from the sample. The regression takes the form: 
@@ -176,11 +152,10 @@ Exclusion criteria are specified:
 
 >If participants miss greater than or equal to 50% of items on a personality scale, they will be coded as missing a score for that scale and not be included in analyses involving that scale. Due to the nature of the CTB task, participants who miss more than one item per timeframe pair will be coded as missing and excluded from analysis. Finally, participants who did not self-report household income will be excluded from analysis.
 
-
 As we saw above, some participants are missing more than one response on the CTB task. No one did not report income. Some participants failed to answer >50% of items on a personality scale.
 
 ```{r}
-scale_data <- read_csv('ScoredScales_JRP_poverty.csv')
+scale_data <- read_csv(file.path(data_dir_base, 'JRPdataOSF.csv'))
 
 scale_data_missing <- select(scale_data, contains('score'), subID) %>%
   filter_at(.vars = vars(-subID), any_vars(is.na(.)))
@@ -227,13 +202,15 @@ mctb_data$beta_nls <- beta_nls
 mctb_data$delta_nls <- delta_nls
 ```
 
-We can interpret these values as follows: $a$ is considerably less than 1, indicating overall risk-aversion. In other words, people are willing to pay a cost, with the delay held equal, just for getting money sooner rather than waiting. The parameter $b < 1$ indicates people discount even a bit more by a factor of $b = `r round(beta_nls,4)`$ if they can get the sooner reward today, rather than waiting five weeks. In other words, for a constant delay of 5 weeks, they discount at a rate $d=`r round(delta_nls,4)`$ per day multiplied by $`r round(beta_nls,4)`$ if they get the sooner reward today (the sooner discount for a five week delay is $`r round(delta_nls,4)`^{5\times7} = `r round(delta_nls^(5*7),4)`$, but if the sooner reward is today, it's $`r round(beta_nls,4)` \times `r round(delta_nls,4)`^{5\times7} = `r round(beta_nls*delta_nls^(5*7),4)`$).
+We can interpret these values as follows: $a$ is considerably less than 1, indicating that generally people do not prefer the all-sooner or all-later options, but, rather, prefer to take some money sooner and some money later.  The parameter $b < 1$ indicates people discount even a bit more by a factor of $b = `r round(beta_nls,4)`$ if they can get the sooner reward today, rather than waiting five weeks. In other words, for a constant delay of 5 weeks, they discount at a rate $d=`r round(delta_nls,4)`$ exponentiated by day then multiplied by $`r round(beta_nls,4)`$ if they get the sooner reward today (the sooner discount for a five week delay is $`r round(delta_nls,4)`^{5\times7} = `r round(delta_nls^(5*7),4)`$, but if the sooner reward is today, it's $`r round(beta_nls,4)` \times `r round(delta_nls,4)`^{5\times7} = `r round(beta_nls*delta_nls^(5*7),4)`$).
 
 If we apply this to the full equation above, we can find the sooner payout that, combined with the portion of the payout received later, is equivalent to a \$20 later payout for a participant with these parameter values (if the sooner payout is received today, for a price ratio of, say, 20/16 = `r 20/16`):
 
-```{r}
-sooner_choice_calc <- (20 * (beta_nls*delta_nls^(7*5)*1.25)^(1/(alpha_nls-1)) )/
-  ( 1 + 1.25 * (beta_nls*delta_nls^(7*5)*1.25)^(1/(alpha_nls-1)) )
+```{r results = 'hold'}
+round((sooner_choice_calc <- (20 * (beta_nls*delta_nls^(7*5)*1.25)^(1/(alpha_nls-1)) )/
+  ( 1 + 1.25 * (beta_nls*delta_nls^(7*5)*1.25)^(1/(alpha_nls-1)) )),2)
+round((amount_received_later <- 20-sooner_choice_calc*20/16), 2)
+round(total_amount_received <- sooner_choice_calc + amount_received_later, 2)
 ```
 
 $$
@@ -242,7 +219,7 @@ $$
 
 So, these population parameters suggest that someone will be just as happy getting \$`r round(sooner_choice_calc,2)` today and \$`r round(20-(1.25*sooner_choice_calc),2)` (for a total of \$`r round(sooner_choice_calc + 20-(1.25*sooner_choice_calc),2)`) later as they would to receive the full $20 later.
 
-Another way of expressing the discounting variable is in terms of a monthly discount rate. This works out to be the amount someone gives up to avoid a month-long delay as a percentage of the total they receive immediately.
+Another way of expressing the discounting variable is in terms of a monthly discount rate:
 
 ```{r monthly discount rate}
 (a_monthly_rate <- delta_nls^(-30) - 1)
@@ -250,7 +227,7 @@ Another way of expressing the discounting variable is in terms of a monthly disc
 
 # Individual-level parameters
 
-Find the cases that have no meaningful variability in their responses. We exclude trials where you could receive \$20 sooner or \$20 later.
+Finding the cases that have no meaningful variability in their responses. We exclude trials where you could receive \$20 sooner or \$20 later.
 
 ```{r}
 odd_cases <- group_by(mctb_data, subject_id) %>%
@@ -267,7 +244,7 @@ odd_cases <- group_by(mctb_data, subject_id) %>%
       TRUE ~ FALSE
     ))
 
-print(paste0('All cases that have no variance also have no interior solutions: ', 
+print(paste0('Do all cases that have no variance also have no interior solutions? ', 
              all(odd_cases$no_interior[odd_cases$no_variance])))
 
 #View(odd_cases)
@@ -280,10 +257,6 @@ table(odd_cases[,2:3])
 This indicates that 345 participants always answer either sooner or later exclusively (excluding the \$20 now versus \$20 later trials). 533 participants use the interior options, and 201 participants just switch between taking everything sooner, or everything later.
 
 ```{r message = T, warning = T, error = F}
-mctb_form_char <- 'sooner_choice_scaled ~ 
-    ( endowment_later_scaled * (b^t0 * d^k_w * pratio)^(1/(a-1)) ) / 
-    ( 1+pratio * (b^t0 * d^k_w * pratio)^(1/(a-1)) )'
-
 mctb_nlslist <- nlsList(
   sooner_choice_scaled ~ 
     ( endowment_later_scaled * (b^t0 * d^k_w * pratio)^(1/(a-1)) ) / 
@@ -308,7 +281,7 @@ mctb_data_diagnostics <- left_join(
   by = 'subject_id')
 ```
 
-
+Take a look at responses from those with convergent versus non-convergent nls models. The first three panels are convergent, and the last three are non-convergnet.
 
 ```{r fig.width=10, fig.height=4}
 ggplot2::theme_set(ggplot2::theme_minimal())
@@ -318,6 +291,8 @@ plot_mctb_responses(
              converged_df$subject_id[!converged_df$nlslist_converged][1:3])),
   adj.pratio = TRUE)
 ```
+
+Use the nlslist object to start up the linear mixed effects model:
 
 ```{r}
 mctb_nlme.nlslist <- nlme.nlsList(model = mctb_nlslist,
@@ -366,7 +341,7 @@ mctb_model_results <- distinct(mctb_data_model_info,
                                no_interior, no_variance, nlslist_converged)
 write_csv(mctb_model_results, 
           path = file.path(data_dir_base, 
-                           'Data/mctb_model_parameters.csv'))
+                           'JRP_CTB_model_paramsOSF.csv'))
 ```
 
 ```{r}
@@ -428,28 +403,7 @@ for(i in unique((1:23 -1) %/% 6)){
 }
 ```
 
-
-## Plotting all the choices
-
-```{r fig.height=3, fig.width=8, eval = FALSE}
-set.seed(2134123)
-theme_set(theme_minimal())
-
-mctb_sample_ids <- distinct(mctb_data, subject_id) %>%
-  mutate(plot_group = (1:n()-1) %/% 5)
-
-for(g in 0:max(mctb_sample_ids$plot_group)){
-  mctb_data_sample <- left_join(
-    filter(mctb_sample_ids, plot_group == g),
-           mctb_data, by = 'subject_id')
-  
-  aplot <- plot_mctb_responses(mctb_data_sample)
-  print(aplot)
-}
-```
-
-
-### Parameter-behavior correlation check
+## Parameter-behavior correlation check
 
 ```{r}
 behavior_summary <- group_by(mctb_data, t0, subject_id) %>%
@@ -467,3 +421,40 @@ plot(compare_df$diff_choice, compare_df$b)
 ```
 
 The above plots indicate a reasonable mapping of individual-level parameter values to the observed behavior.
+
+# Plotting all the choices
+
+```{r fig.height=3, fig.width=8}
+theme_set(theme_minimal())
+
+mctb_sample_ids <- distinct(mctb_data, subject_id) %>%
+  mutate(plot_group = (1:n()-1) %/% 5)
+
+for(g in 0:max(mctb_sample_ids$plot_group)){
+  mctb_data_sample <- left_join(
+    filter(mctb_sample_ids, plot_group == g),
+           mctb_data, by = 'subject_id')
+  
+  aplot <- plot_mctb_responses(mctb_data_sample)
+  print(aplot)
+}
+```
+
+# Check sensitivity to letting $\alpha$ vary over individuals
+
+```{r}
+#this model shows poor convergence
+mctb_nlme.nlslist_a <- nlme.nlsList(model = mctb_nlslist,
+                                    random = a + b + d ~ 1,
+                                    groups = ~subject_id,
+                                    method = 'ML',
+                                    control = nlmeControl(msVerbose = TRUE, 
+                                                          niterEM = 100,
+                                                          pnlsTol = 1.1),
+                                    verbose = 2)
+summary(mctb_nlme.nlslist_a)
+summary(mctb_nlme.nlslist)
+
+plot(coef(mctb_nlme.nlslist_a)[,'b'], coef(mctb_nlme.nlslist)[,'b'])
+plot(coef(mctb_nlme.nlslist_a)[,'d'], coef(mctb_nlme.nlslist)[,'d'])
+```
